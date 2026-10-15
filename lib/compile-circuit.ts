@@ -29,6 +29,10 @@ function shape(e: Element, hole = false): Point[][] {
       (r) => expandBrepRing(r.vertices),
     )
   if (e.outline?.length) return [e.outline]
+  if (e.shape === "hole_with_polygon_pad" && !hole) {
+    const c = center(e)
+    return [e.pad_outline.map((p: Point) => ({ x: c.x + p.x, y: c.y + p.y }))]
+  }
   if (e.shape === "rotated_pill_hole_with_rect_pad") {
     // Pad and slot use independent rotations. Hole offsets are board-space
     // coordinates, as in the reference canvas renderer, not pad-local offsets.
@@ -62,7 +66,8 @@ function shape(e: Element, hole = false): Point[][] {
           y: base.y + (e.hole_offset_y ?? 0),
         },
         base,
-        rotation,
+        // Polygon-pad drill offsets are in board coordinates.
+        e.shape === "hole_with_polygon_pad" ? 0 : rotation,
       )
     : base
   if (

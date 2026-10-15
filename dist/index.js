@@ -929,6 +929,10 @@ function shape(e, hole = false) {
       (r) => expandBrepRing(r.vertices)
     );
   if (e.outline?.length) return [e.outline];
+  if (e.shape === "hole_with_polygon_pad" && !hole) {
+    const c2 = center(e);
+    return [e.pad_outline.map((p) => ({ x: c2.x + p.x, y: c2.y + p.y }))];
+  }
   if (e.shape === "rotated_pill_hole_with_rect_pad") {
     const base2 = center(e);
     const c2 = hole ? {
@@ -956,7 +960,8 @@ function shape(e, hole = false) {
       y: base.y + (e.hole_offset_y ?? 0)
     },
     base,
-    rotation
+    // Polygon-pad drill offsets are in board coordinates.
+    e.shape === "hole_with_polygon_pad" ? 0 : rotation
   ) : base;
   if (kind === "circle" || kind === "circular_hole_with_rect_pad" && hole || e.type === "pcb_via") {
     const diameter = hole ? e.hole_diameter : e.outer_diameter ?? (e.radius != null ? e.radius * 2 : e.diameter);
