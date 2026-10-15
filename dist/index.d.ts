@@ -56,6 +56,8 @@ type CompiledLayer = {
 };
 type CompiledScene = {
     layers: CompiledLayer[];
+    /** Analytic stroke records: center, half-size, rotation axis, half-width, radius. */
+    strokeData?: Float32Array;
     elementIds: string[];
     diagnostics: Diagnostic[];
     triangleCount: number;
@@ -92,6 +94,7 @@ declare class CircuitToWebGpuDrawer {
     private xRayCameraGroup?;
     private uniform;
     private highlights;
+    private strokes?;
     private cameraGroup?;
     private highlightKey;
     private highlightIndices;

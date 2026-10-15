@@ -41,6 +41,8 @@ export type Mesh = { vertices: Float32Array; indices: Uint32Array }
 export type CompiledLayer = { name: string; paint: Mesh; erase: Mesh }
 export type CompiledScene = {
   layers: CompiledLayer[]
+  /** Analytic stroke records: center, half-size, rotation axis, half-width, radius. */
+  strokeData?: Float32Array
   elementIds: string[]
   diagnostics: Diagnostic[]
   triangleCount: number

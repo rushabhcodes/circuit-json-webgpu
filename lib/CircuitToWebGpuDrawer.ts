@@ -44,6 +44,7 @@ export class CircuitToWebGpuDrawer {
   private xRayCameraGroup?: GPUBindGroup
   private uniform: GPUBuffer
   private highlights: GPUBuffer
+  private strokes?: GPUBuffer
   private cameraGroup?: GPUBindGroup
   private highlightKey = ""
   private highlightIndices = new Map<string, number>()
@@ -135,6 +136,11 @@ export class CircuitToWebGpuDrawer {
               visibility: GPUShaderStage.VERTEX,
               buffer: { type: "read-only-storage" },
             },
+            {
+              binding: 2,
+              visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+              buffer: { type: "read-only-storage" },
+            },
           ],
         }),
       ],
@@ -206,6 +212,17 @@ export class CircuitToWebGpuDrawer {
       size: Math.max(4, scene.elementIds.length * 4),
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     })
+    this.strokes?.destroy()
+    this.strokes = this.device.createBuffer({
+      size: Math.max(32, scene.strokeData?.byteLength ?? 0),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    })
+    if (scene.strokeData?.byteLength)
+      this.device.queue.writeBuffer(
+        this.strokes,
+        0,
+        scene.strokeData.buffer as ArrayBuffer,
+      )
     this.highlightIndices = new Map(
       scene.elementIds.map((id, index) => [id, index]),
     )
@@ -215,6 +232,7 @@ export class CircuitToWebGpuDrawer {
       entries: [
         { binding: 0, resource: { buffer: this.uniform } },
         { binding: 1, resource: { buffer: this.highlights } },
+        { binding: 2, resource: { buffer: this.strokes } },
       ],
     })
     this.xRayCameraGroup = this.device.createBindGroup({
@@ -222,9 +240,10 @@ export class CircuitToWebGpuDrawer {
       entries: [
         { binding: 0, resource: { buffer: this.xRayUniform } },
         { binding: 1, resource: { buffer: this.highlights } },
+        { binding: 2, resource: { buffer: this.strokes } },
       ],
     })
-    this.stats.vertexBytes = 0
+    this.stats.vertexBytes = scene.strokeData?.byteLength ?? 0
     const upload = (mesh: Mesh): GpuMesh => {
       const make = (data: Float32Array | Uint32Array, usage: number) => {
         const buffer = this.device.createBuffer({
@@ -573,6 +592,7 @@ export class CircuitToWebGpuDrawer {
     this.uniform.destroy()
     this.xRayUniform.destroy()
     this.highlights.destroy()
+    this.strokes?.destroy()
     this.context.unconfigure()
     // Let queued writes finish before device destruction and worker teardown.
     const destroyDevice = () => this.device.destroy()
