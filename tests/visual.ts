@@ -69,6 +69,127 @@ try {
       ),
     ]
   }
+  const silkscreenPills = await page.evaluate(async () => {
+    const drawer = window.gpuTest.drawer
+    const canvas = document.querySelector("canvas")!
+    const frame = () => canvas.toDataURL("image/png").split(",")[1]
+    const results = []
+    for (const layer of ["top", "bottom"] as const) {
+      for (const pill of [
+        {
+          name: "horizontal",
+          width: 6,
+          height: 2,
+          rotation: 0,
+          ink: [400, 260],
+          corner: [520, 260],
+        },
+        {
+          name: "vertical",
+          width: 2,
+          height: 6,
+          rotation: 0,
+          ink: [440, 300],
+          corner: [440, 180],
+        },
+        {
+          name: "circular",
+          width: 2,
+          height: 2,
+          rotation: 0,
+          ink: [440, 300],
+          corner: [440, 260],
+        },
+        {
+          name: "rotated",
+          width: 6,
+          height: 2,
+          rotation: 90,
+          ink: [360, 300],
+          corner: [360, 180],
+        },
+        {
+          name: "diagonal",
+          width: 6,
+          height: 2,
+          rotation: 45,
+          ink: [372, 272],
+          corner: [457, 187],
+        },
+      ]) {
+        drawer.drawElements(
+          [
+            {
+              type: "pcb_silkscreen_pill",
+              pcb_silkscreen_pill_id: "pill",
+              pcb_component_id: "component",
+              center: { x: 0, y: 0 },
+              layer,
+              width: pill.width,
+              height: pill.height,
+              ccw_rotation: pill.rotation,
+            },
+          ],
+          {
+            transform: { a: 40, b: 0, c: 0, d: -40, e: 400, f: 300 },
+            layers: [`${layer}_silkscreen`],
+            selectedLayer: layer,
+            hiddenLayerOpacity: 0,
+            showSilkscreen: true,
+            background: [0, 0, 0, 1],
+          },
+        )
+        await drawer.flush()
+        const visible = frame()
+        const uploads = drawer.stats.geometryUploads
+        drawer.render({ showSilkscreen: false })
+        await drawer.flush()
+        const hidden = frame()
+        drawer.render({ showSilkscreen: true })
+        await drawer.flush()
+        results.push({
+          ...pill,
+          layer,
+          diagnostics: drawer.diagnostics,
+          visible,
+          hidden,
+          restored: frame(),
+          geometryUploadsDuringToggle: drawer.stats.geometryUploads - uploads,
+        })
+      }
+    }
+    return results
+  })
+  for (const pill of silkscreenPills) {
+    const name = `${pill.layer} ${pill.name} pill`
+    assert.deepEqual(pill.diagnostics, [], name)
+    assert.deepEqual(
+      pixel(pill.visible, pill.ink[0], pill.ink[1]),
+      [242, 237, 161, 255],
+      `${name}: outline must be visible`,
+    )
+    assert.deepEqual(
+      pixel(pill.visible, 400, 300),
+      [0, 0, 0, 255],
+      `${name}: center must stay hollow`,
+    )
+    assert.deepEqual(
+      pixel(pill.visible, pill.corner[0], pill.corner[1]),
+      [0, 0, 0, 255],
+      `${name}: corners must be rounded`,
+    )
+    assert.deepEqual(
+      pixel(pill.hidden, pill.ink[0], pill.ink[1]),
+      [0, 0, 0, 255],
+      `${name}: silkscreen toggle must hide the outline`,
+    )
+    assert.deepEqual(
+      pixel(pill.restored, pill.ink[0], pill.ink[1]),
+      [242, 237, 161, 255],
+      `${name}: silkscreen toggle must restore the outline`,
+    )
+    assert.equal(pill.geometryUploadsDuringToggle, 0, name)
+  }
   const fabrication = await page.evaluate(() => {
     const drawer = window.gpuTest.drawer
     const canvas = document.querySelector("canvas")!
