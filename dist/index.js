@@ -987,7 +987,6 @@ function shape(e, hole = false) {
 }
 function compileCircuitJson(elements, options = {}) {
   const builders = /* @__PURE__ */ new Map();
-  const strokeData = [];
   const diagnostics = [], elementIds = elements.map(getElementId);
   const board = elements.find((e) => e.type === "pcb_board");
   const copper = [
@@ -1146,28 +1145,14 @@ function compileCircuitJson(elements, options = {}) {
         } else if (type === "pcb_silkscreen_graphic" && e.shape === "brep") {
           mesh.polygon(shape(e));
         } else if (input.type === "pcb_silkscreen_pill") {
-          const angle = (input.ccw_rotation ?? 0) * Math.PI / 180;
-          mesh.category = 2 + strokeData.length / 8;
-          strokeData.push(
-            input.center.x,
-            input.center.y,
-            input.width / 2,
-            input.height / 2,
-            Math.cos(angle),
-            Math.sin(angle),
-            0.05,
-            // Half of the SVG renderer's fixed 0.1 mm stroke.
-            Math.min(input.width, input.height) / 2
+          const points = rectangle(
+            input.center,
+            input.width,
+            input.height,
+            Math.min(input.width, input.height) / 2,
+            input.ccw_rotation ?? 0
           );
-          mesh.polygon([
-            rectangle(
-              input.center,
-              input.width,
-              input.height,
-              0,
-              input.ccw_rotation ?? 0
-            )
-          ]);
+          mesh.path(points, 0.1, true);
         } else if (type.endsWith("_rect")) {
           const points = rectangle(
             center(e),
@@ -1246,7 +1231,6 @@ function compileCircuitJson(elements, options = {}) {
   }));
   return {
     layers,
-    ...strokeData.length ? { strokeData: new Float32Array(strokeData) } : {},
     elementIds,
     diagnostics,
     triangleCount: layers.reduce(
@@ -1263,8 +1247,6 @@ var geometryShader = (
 struct Camera { rowX: vec4f, rowY: vec4f, viewport: vec4f }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> highlights: array<u32>;
-struct Stroke { center: vec2f, halfSize: vec2f, axis: vec2f, halfWidth: f32, radius: f32 }
-@group(0) @binding(2) var<storage, read> strokes: array<Stroke>;
 struct VertexOut {
   @builtin(position) position: vec4f,
   @location(0) color: vec4f,
@@ -1273,22 +1255,7 @@ struct VertexOut {
 }
 @vertex fn vertexMain(@location(0) p: vec2f, @location(1) color: vec4f,
   @location(2) element: f32, @location(3) category: f32) -> VertexOut {
-  var world = p;
-  if (category >= 2) {
-    let stroke = strokes[u32(category) - 2u];
-    let delta = p - stroke.center;
-    let local = vec2f(dot(delta, stroke.axis), dot(delta, vec2f(-stroke.axis.y, stroke.axis.x)));
-    let linear = vec4f(camera.rowX.xy, camera.rowY.xy);
-    let determinant = camera.rowX.x * camera.rowY.y - camera.rowX.y * camera.rowY.x;
-    // Bound the inverse camera scale, including rotation and shear, so the quad
-    // includes the antialiasing fringe without recompiling when the camera moves.
-    let padding = 1.5 * length(linear) / max(abs(determinant), 1e-12);
-    let corner = sign(local) * (stroke.halfSize + vec2f(stroke.halfWidth + padding));
-    world = stroke.center + vec2f(
-      stroke.axis.x * corner.x - stroke.axis.y * corner.y,
-      stroke.axis.y * corner.x + stroke.axis.x * corner.y);
-  }
-  let pixel = vec2f(dot(camera.rowX.xyz, vec3f(world, 1)), dot(camera.rowY.xyz, vec3f(world, 1)));
+  let pixel = vec2f(dot(camera.rowX.xyz, vec3f(p, 1)), dot(camera.rowY.xyz, vec3f(p, 1)));
   var out: VertexOut;
   out.position = vec4f(pixel.x / camera.viewport.x * 2 - 1, 1 - pixel.y / camera.viewport.y * 2, 0, 1);
   let highlight = select(0.0, 1.0, (highlights[u32(element)] & 1u) != 0u);
@@ -1297,51 +1264,13 @@ struct VertexOut {
   out.selected = highlights[u32(element)] & 2u;
   return out;
 }
-// CDF of a pixel box projected onto the stroke normal. Taking the difference at
-// the two stroke edges preserves coverage even when the stroke is subpixel.
-fn pixelCDF(distance: f32, dx: f32, dy: f32) -> f32 {
-  let major = max(max(dx, dy), 1e-6);
-  let minor = min(dx, dy);
-  if (minor < major * 1e-5) { return clamp(0.5 + distance / major, 0, 1); }
-  let edge = (major + minor) * 0.5;
-  if (distance <= -edge) { return 0; }
-  if (distance >= edge) { return 1; }
-  let flat = (major - minor) * 0.5;
-  if (distance < -flat) { return (distance + edge) * (distance + edge) / (2 * major * minor); }
-  if (distance > flat) { return 1 - (edge - distance) * (edge - distance) / (2 * major * minor); }
-  return 0.5 + distance / major;
-}
 @fragment fn fragmentMain(in: VertexOut) -> @location(0) vec4f {
-  var coverage = 1.0;
-  if (in.category >= 2u) {
-    let stroke = strokes[in.category - 2u];
-    let determinant = camera.rowX.x * camera.rowY.y - camera.rowX.y * camera.rowY.x;
-    let screen = in.position.xy - vec2f(camera.rowX.z, camera.rowY.z);
-    let worldDx = vec2f(camera.rowY.y, -camera.rowY.x) / determinant;
-    let worldDy = vec2f(-camera.rowX.y, camera.rowX.x) / determinant;
-    let world = screen.x * worldDx + screen.y * worldDy;
-    let delta = world - stroke.center;
-    let local = vec2f(dot(delta, stroke.axis), dot(delta, vec2f(-stroke.axis.y, stroke.axis.x)));
-    let q = abs(local) - stroke.halfSize + vec2f(stroke.radius);
-    let rounded = max(q, vec2f(0));
-    let radius = length(rounded);
-    let distance = radius + min(max(q.x, q.y), 0) - stroke.radius;
-    var gradient = select(vec2f(0, 1), vec2f(1, 0), q.x > q.y);
-    if (radius > 0) { gradient = rounded / radius; }
-    gradient *= select(vec2f(-1), vec2f(1), local >= vec2f(0));
-    let normal = vec2f(stroke.axis.x * gradient.x - stroke.axis.y * gradient.y,
-      stroke.axis.y * gradient.x + stroke.axis.x * gradient.y);
-    let dx = abs(dot(normal, worldDx));
-    let dy = abs(dot(normal, worldDy));
-    coverage = clamp(pixelCDF(stroke.halfWidth - distance, dx, dy)
-      - pixelCDF(-stroke.halfWidth - distance, dx, dy), 0, 1);
-  }
   if (in.category == 1u && camera.viewport.z == 0) { discard; }
   if (camera.viewport.w == 1) {
     if (in.selected == 0u) { discard; }
-    return vec4f(in.color.rgb * coverage, coverage);
+    return vec4f(in.color.rgb, 1);
   }
-  let alpha = in.color.a * coverage * select(1.0, camera.viewport.z, in.category == 1u);
+  let alpha = in.color.a * select(1.0, camera.viewport.z, in.category == 1u);
   return vec4f(in.color.rgb * alpha, alpha);
 }
 `
@@ -1402,11 +1331,6 @@ var CircuitToWebGpuDrawer = class _CircuitToWebGpuDrawer {
             {
               binding: 1,
               visibility: GPUShaderStage.VERTEX,
-              buffer: { type: "read-only-storage" }
-            },
-            {
-              binding: 2,
-              visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
               buffer: { type: "read-only-storage" }
             }
           ]
@@ -1487,7 +1411,6 @@ var CircuitToWebGpuDrawer = class _CircuitToWebGpuDrawer {
   xRayCameraGroup;
   uniform;
   highlights;
-  strokes;
   cameraGroup;
   highlightKey = "";
   highlightIndices = /* @__PURE__ */ new Map();
@@ -1554,17 +1477,6 @@ var CircuitToWebGpuDrawer = class _CircuitToWebGpuDrawer {
       size: Math.max(4, scene.elementIds.length * 4),
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
     });
-    this.strokes?.destroy();
-    this.strokes = this.device.createBuffer({
-      size: Math.max(32, scene.strokeData?.byteLength ?? 0),
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    });
-    if (scene.strokeData?.byteLength)
-      this.device.queue.writeBuffer(
-        this.strokes,
-        0,
-        scene.strokeData.buffer
-      );
     this.highlightIndices = new Map(
       scene.elementIds.map((id, index) => [id, index])
     );
@@ -1573,19 +1485,17 @@ var CircuitToWebGpuDrawer = class _CircuitToWebGpuDrawer {
       layout: this.paintPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: this.uniform } },
-        { binding: 1, resource: { buffer: this.highlights } },
-        { binding: 2, resource: { buffer: this.strokes } }
+        { binding: 1, resource: { buffer: this.highlights } }
       ]
     });
     this.xRayCameraGroup = this.device.createBindGroup({
       layout: this.paintPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: this.xRayUniform } },
-        { binding: 1, resource: { buffer: this.highlights } },
-        { binding: 2, resource: { buffer: this.strokes } }
+        { binding: 1, resource: { buffer: this.highlights } }
       ]
     });
-    this.stats.vertexBytes = scene.strokeData?.byteLength ?? 0;
+    this.stats.vertexBytes = 0;
     const upload = (mesh) => {
       const make = (data, usage) => {
         const buffer = this.device.createBuffer({
@@ -1877,7 +1787,6 @@ var CircuitToWebGpuDrawer = class _CircuitToWebGpuDrawer {
     this.uniform.destroy();
     this.xRayUniform.destroy();
     this.highlights.destroy();
-    this.strokes?.destroy();
     this.context.unconfigure();
     const destroyDevice = () => this.device.destroy();
     void this.device.queue.onSubmittedWorkDone().then(destroyDevice, destroyDevice);

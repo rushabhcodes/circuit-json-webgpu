@@ -116,7 +116,6 @@ export function compileCircuitJson(
   } = {},
 ): CompiledScene {
   const builders = new Map<string, { paint: MeshBuilder; erase: MeshBuilder }>()
-  const strokeData: number[] = []
   const diagnostics: Diagnostic[] = [],
     elementIds = elements.map(getElementId)
   const board = elements.find((e) => e.type === "pcb_board") as
@@ -315,29 +314,15 @@ export function compileCircuitJson(
         } else if (type === "pcb_silkscreen_graphic" && e.shape === "brep") {
           mesh.polygon(shape(e))
         } else if (input.type === "pcb_silkscreen_pill") {
-          const angle = ((input.ccw_rotation ?? 0) * Math.PI) / 180
-          // Categories 2+ reference analytic strokes. A padded quad lets the
-          // fragment shader cover strokes thinner than an MSAA sample spacing.
-          mesh.category = 2 + strokeData.length / 8
-          strokeData.push(
-            input.center.x,
-            input.center.y,
-            input.width / 2,
-            input.height / 2,
-            Math.cos(angle),
-            Math.sin(angle),
-            0.05, // Half of the SVG renderer's fixed 0.1 mm stroke.
+          const points = rectangle(
+            input.center,
+            input.width,
+            input.height,
             Math.min(input.width, input.height) / 2,
+            input.ccw_rotation ?? 0,
           )
-          mesh.polygon([
-            rectangle(
-              input.center,
-              input.width,
-              input.height,
-              0,
-              input.ccw_rotation ?? 0,
-            ),
-          ])
+          // Match the fixed pill outline used by the SVG renderer.
+          mesh.path(points, 0.1, true)
         } else if (type.endsWith("_rect")) {
           const points = rectangle(
             center(e),
@@ -420,7 +405,6 @@ export function compileCircuitJson(
   }))
   return {
     layers,
-    ...(strokeData.length ? { strokeData: new Float32Array(strokeData) } : {}),
     elementIds,
     diagnostics,
     triangleCount: layers.reduce(
