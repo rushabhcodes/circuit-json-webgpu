@@ -29,6 +29,12 @@ function shape(e: Element, hole = false): Point[][] {
       (r) => expandBrepRing(r.vertices),
     )
   if (e.outline?.length) return [e.outline]
+  if (e.shape === "hole_with_polygon_pad" && !hole) {
+    // The reference renderer treats pad_outline as already-oriented offsets
+    // from (x, y); ccw_rotation is not applied to the polygon again.
+    const c = center(e)
+    return [e.pad_outline.map((p: Point) => ({ x: c.x + p.x, y: c.y + p.y }))]
+  }
   if (e.shape === "rotated_pill_hole_with_rect_pad") {
     // Pad and slot use independent rotations. Hole offsets are board-space
     // coordinates, as in the reference canvas renderer, not pad-local offsets.
@@ -62,7 +68,8 @@ function shape(e: Element, hole = false): Point[][] {
           y: base.y + (e.hole_offset_y ?? 0),
         },
         base,
-        rotation,
+        // Polygon-pad drill offsets are in board coordinates.
+        e.shape === "hole_with_polygon_pad" ? 0 : rotation,
       )
     : base
   if (
@@ -355,6 +362,9 @@ export function compileCircuitJson(
           "pcb_trace_hint",
           "pcb_anchor",
           "pcb_breakout_point", // Routing target metadata, not visible geometry.
+          // Mechanical flex elements are not drawn in circuit-to-canvas's 2D view.
+          "pcb_bend",
+          "pcb_stiffener",
         ].includes(type) &&
         !/_(error|warning)$/.test(type)
       ) {

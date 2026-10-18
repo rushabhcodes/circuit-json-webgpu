@@ -10,3 +10,4 @@ bun.lock
 
 site-dist/
 .vercel/
+/dist/

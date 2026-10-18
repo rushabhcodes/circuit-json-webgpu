@@ -43,6 +43,15 @@ export async function checkCopperPourOpacity() {
       hiddenLayerOpacity: 0.4,
     })
     capture("default")
+    for (const background of ["black", "white"] as const) {
+      const value = background === "black" ? 0 : 1
+      drawer.render({
+        hiddenLayerOpacity: 1,
+        background: [value, value, value, 1],
+      })
+      capture(background)
+    }
+    drawer.render({ hiddenLayerOpacity: 0.4, background: [0, 0, 0, 0] })
     for (const [name, opacity] of Object.entries({
       half: 0.5,
       zero: 0,
@@ -69,7 +78,7 @@ export async function checkCopperPourOpacity() {
       hiddenLayerOpacity: 0.4,
     })
     capture("independent")
-    return { frames, geometryUploads: drawer.stats.geometryUploads }
+    return { frames, elements, geometryUploads: drawer.stats.geometryUploads }
   } finally {
     drawer.dispose()
   }

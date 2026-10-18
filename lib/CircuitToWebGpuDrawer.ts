@@ -19,6 +19,9 @@ type Layer = {
   texture?: GPUTexture
   composite?: GPUBindGroup
 }
+// Match the 50% copper-pour fill opacity used by circuit-to-canvas and circuit-to-svg.
+const DEFAULT_COPPER_POUR_OPACITY = 0.5
+
 const over: GPUBlendState = {
   color: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
   alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
@@ -304,7 +307,7 @@ export class CircuitToWebGpuDrawer {
         ? 0
         : Number.isFinite(o.copperPourOpacity)
           ? Math.max(0, Math.min(1, o.copperPourOpacity!))
-          : 1
+          : DEFAULT_COPPER_POUR_OPACITY
     this.resize(width, height)
     this.device.queue.writeBuffer(
       this.uniform,

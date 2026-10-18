@@ -15,7 +15,7 @@ export type RenderOptions = {
   layers?: readonly string[]
   selectedLayer?: string
   hiddenLayerOpacity?: number
-  /** Copper-pour alpha multiplier (0–1, default 1). showCopperPours=false overrides it. */
+  /** Copper-pour alpha multiplier (0–1, default 0.5, matching Canvas/SVG). showCopperPours=false overrides it. */
   copperPourOpacity?: number
   showCopperPours?: boolean
   /** Board substrate is hidden by default; outlines remain visible. */

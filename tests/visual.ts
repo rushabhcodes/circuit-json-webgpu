@@ -4,8 +4,17 @@ import { fileURLToPath } from "node:url"
 import { createServer } from "vite"
 import { chromium } from "playwright"
 import { PNG } from "pngjs"
+import { Resvg } from "@resvg/resvg-js"
+import { createCanvas } from "@napi-rs/canvas"
+import { convertCircuitJsonToPcbSvg } from "circuit-to-svg"
+import { drawPcbCopperPour } from "circuit-to-canvas/lib/drawer/elements/pcb-copper-pour"
+import { DEFAULT_PCB_COLOR_MAP } from "circuit-to-canvas/lib/drawer/types"
 import pixelmatch from "pixelmatch"
+import { featureSnapshot } from "./parity/snapshot"
+import { prepareComparison } from "./parity/prepare"
 import { compose, scale, translate } from "transformation-matrix"
+import type { CircuitJson } from "../lib"
+import pcbBendFixture from "./fixtures/pcb-bend.circuit.json"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
 const server = await createServer({
@@ -250,15 +259,67 @@ try {
   )
   const pourAlpha = (name: string, x: number) =>
     pixel(pours.frames[name], x, 110)[3]
-  for (const name of ["default", "aboveOne", "nan", "independent"]) {
-    assert.equal(pourAlpha(name, 50), 255)
-    assert.equal(pourAlpha(name, 110), 102)
-    assert.equal(pourAlpha(name, 170), 102)
-  }
-  for (const name of ["half", "retained", "shown"]) {
+  assert.equal(pourAlpha("aboveOne", 50), 255)
+  assert.equal(pourAlpha("aboveOne", 110), 102)
+  assert.equal(pourAlpha("aboveOne", 170), 102)
+  for (const name of [
+    "default",
+    "half",
+    "nan",
+    "retained",
+    "shown",
+    "independent",
+  ]) {
     assert(Math.abs(pourAlpha(name, 50) - 128) <= 1)
     assert(Math.abs(pourAlpha(name, 110) - 51) <= 1)
     assert(Math.abs(pourAlpha(name, 170) - 51) <= 1)
+  }
+  for (const background of ["black", "white"] as const) {
+    const referenceCanvas = createCanvas(200, 200)
+    const ctx = referenceCanvas.getContext("2d")
+    ctx.fillStyle = background
+    ctx.fillRect(0, 0, 200, 200)
+    for (const pour of pours.elements) {
+      if (pour.type !== "pcb_copper_pour") continue
+      drawPcbCopperPour({
+        ctx,
+        pour,
+        realToCanvasMat: { a: 10, b: 0, c: 0, d: -10, e: 100, f: 100 },
+        colorMap: DEFAULT_PCB_COLOR_MAP,
+      })
+    }
+    const canvasReference = referenceCanvas
+      .toBuffer("image/png")
+      .toString("base64")
+    for (const x of [50, 110, 170]) {
+      const actual = pixel(pours.frames[background], x, 110)
+      const expected = pixel(canvasReference, x, 110)
+      assert(
+        actual.every((channel, i) => Math.abs(channel - expected[i]) <= 1),
+        `Default pour color must match Canvas on ${background}: ${actual} vs ${expected}`,
+      )
+    }
+    const svg = convertCircuitJsonToPcbSvg([...pours.elements], {
+      width: 200,
+      height: 200,
+      viewport: { minX: -10, minY: -10, maxX: 10, maxY: 10 },
+      backgroundColor: background,
+      showSolderMask: false,
+      shouldDrawErrors: false,
+      shouldDrawRatsNest: false,
+      includeVersion: false,
+      drawPaddingOutsideBoard: false,
+    })
+    const reference = new Resvg(svg).render().asPng().toString("base64")
+    // SVG uses a different inner-layer palette; top and bottom match both references.
+    for (const x of [50, 110]) {
+      const actual = pixel(pours.frames[background], x, 110)
+      const expected = pixel(reference, x, 110)
+      assert(
+        actual.every((channel, i) => Math.abs(channel - expected[i]) <= 1),
+        `Default pour color must match SVG on ${background}: ${actual} vs ${expected}`,
+      )
+    }
   }
   for (const name of ["zero", "negative", "hidden", "xrayHidden"])
     for (const x of [50, 110, 170]) assert.equal(pourAlpha(name, x), 0)
@@ -545,6 +606,89 @@ try {
   assert.deepEqual(pixel(throughPad.png, 280, 300), layerColors.top)
   assert.deepEqual(pixel(throughPad.png, 520, 300), layerColors.bottom)
   await snapshot("through-pad-trace")
+  const { scene: pcbBendScene } = prepareComparison({
+    width: 800,
+    height: 600,
+    elements: pcbBendFixture,
+    matrix: { a: 14, b: 0, c: 0, d: -14, e: 400, f: 300 },
+    contextTransform: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 },
+    options: {},
+  })
+  assert(pcbBendScene)
+  const pcbBend = await page.evaluate((scene) => {
+    const drawer = window.gpuTest.drawer
+    const options = {
+      transform: scene.transform,
+      showBendLines: true,
+      selectedLayer: "top",
+      hiddenLayerOpacity: 0,
+      background: [0, 0, 0, 1] as const,
+    }
+    drawer.drawElements(scene.elements as unknown as CircuitJson, options)
+    return {
+      diagnostics: drawer.diagnostics,
+      png: document
+        .querySelector("canvas")!
+        .toDataURL("image/png")
+        .split(",")[1],
+    }
+  }, pcbBendScene)
+  assert.deepEqual(pcbBend.diagnostics, [])
+  // The owning boards remain, but neither bend centerline is rendered.
+  assert.deepEqual(pixel(pcbBend.png, 123, 215), [0, 0, 0, 255])
+  assert.deepEqual(pixel(pcbBend.png, 623, 408), [0, 0, 0, 255])
+  const pcbBendSvg = convertCircuitJsonToPcbSvg(
+    pcbBendScene.elements as Parameters<typeof convertCircuitJsonToPcbSvg>[0],
+    {
+      width: pcbBendScene.width,
+      height: pcbBendScene.height,
+      viewport: pcbBendScene.viewport,
+      layer: "top",
+      showBendLines: true,
+      showSolderMask: false,
+      shouldDrawErrors: false,
+      shouldDrawRatsNest: false,
+      includeVersion: false,
+      drawPaddingOutsideBoard: true,
+      backgroundColor: pcbBendScene.background,
+      colorOverrides: { boardOutline: "#d0d2cd" },
+    },
+  )
+  assert.equal(pcbBendSvg.match(/class="pcb-bend-line"/g)?.length, 2)
+  // Resvg does not load CSS @font-face URLs. Load the reference SVG's embedded
+  // alphabet explicitly so the left panel includes its actual bend labels.
+  const embeddedFont = pcbBendSvg.match(/data:font\/ttf;base64,([^']+)/)?.[1]
+  assert(embeddedFont)
+  const comparisonDir = new URL("./actual/parity/", import.meta.url)
+  await mkdir(comparisonDir, { recursive: true })
+  const fontFile = new URL("pcb-bend-reference.ttf", comparisonDir)
+  await writeFile(fontFile, Buffer.from(embeddedFont, "base64"))
+  const svgPng = new Resvg(pcbBendSvg, {
+    font: { loadSystemFonts: false, fontFiles: [fileURLToPath(fontFile)] },
+  })
+    .render()
+    .asPng()
+  const pcbBendReference = PNG.sync.read(svgPng)
+  assert.deepEqual(
+    pixel(svgPng.toString("base64"), 123, 215),
+    [255, 213, 79, 255],
+  )
+  assert.deepEqual(
+    pixel(svgPng.toString("base64"), 623, 408),
+    [255, 213, 79, 255],
+  )
+  assert(
+    (
+      await featureSnapshot(
+        "pcb-bend",
+        pcbBendReference,
+        PNG.sync.read(Buffer.from(pcbBend.png, "base64")),
+        "pcb-bend",
+      )
+    ).pass,
+    "PCB bend SVG/WebGPU comparison snapshot",
+  )
+  console.log("snapshot pcb-bend (circuit-to-svg / circuit-json-webgpu)")
   for (const name of names) {
     const stats = await page.evaluate(
       (name) => window.gpuTest.renderFixture(name),
@@ -577,9 +721,8 @@ try {
           : name === "keepouts-inner"
             ? layerColors.inner1
             : layerColors.bottom
-      assert.deepEqual(
-        at(260, 202),
-        copper.slice(0, 3),
+      assert(
+        at(260, 202).every((c, i) => Math.abs(c - copper[i] * 0.5) <= 0.5),
         "Hatching must stay inside the circular boundary",
       )
       assert.deepEqual(
@@ -625,7 +768,7 @@ try {
     if (name === "board-outline-cutout")
       assert.deepEqual(at(400, 300), [255, 38, 226])
     if (name === "pour-holes-and-arcs") {
-      assert(at(200, 300)[0] > 150)
+      assert(at(200, 300)[0] >= 100)
       assert(at(400, 280)[0] < 100)
     }
   }
@@ -692,7 +835,7 @@ try {
     errors.filter((e) => !e.includes("404")),
     [],
   )
-  const report = { snapshots: names.length + 3, adapter, large, navigation }
+  const report = { snapshots: names.length + 4, adapter, large, navigation }
   await writeFile(
     new URL("./actual/report.json", import.meta.url),
     JSON.stringify(report, null, 2),

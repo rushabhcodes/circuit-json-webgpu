@@ -1,0 +1,42 @@
+[
+  {
+    "type": "pcb_board",
+    "pcb_board_id": "left-board",
+    "center": { "x": -12, "y": 0 },
+    "width": 20,
+    "height": 24,
+    "thickness": 0.12,
+    "num_layers": 2,
+    "material": "fr4"
+  },
+  {
+    "type": "pcb_board",
+    "pcb_board_id": "right-board",
+    "center": { "x": 12, "y": 0 },
+    "width": 20,
+    "height": 24,
+    "thickness": 0.12,
+    "num_layers": 2,
+    "material": "fr4"
+  },
+  {
+    "type": "pcb_bend",
+    "pcb_bend_id": "horizontal",
+    "pcb_board_id": "left-board",
+    "start": { "x": -8, "y": 6 },
+    "end": { "x": 8, "y": 6 },
+    "bend_angle": 90,
+    "bend_radius": 2,
+    "bend_side": "right"
+  },
+  {
+    "type": "pcb_bend",
+    "pcb_bend_id": "vertical",
+    "pcb_board_id": "right-board",
+    "start": { "x": 4, "y": -8 },
+    "end": { "x": 4, "y": 8 },
+    "bend_angle": -90,
+    "bend_radius": 2,
+    "bend_side": "left"
+  }
+]
