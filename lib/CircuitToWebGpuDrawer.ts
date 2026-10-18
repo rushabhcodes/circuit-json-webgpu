@@ -10,7 +10,12 @@ import type {
   RenderOptions,
 } from "./types"
 
-type GpuMesh = { vertices: GPUBuffer; indices: GPUBuffer; count: number }
+type GpuMesh = {
+  vertices: GPUBuffer
+  indices: GPUBuffer
+  count: number
+  stroke?: GPUBuffer
+}
 type Layer = {
   name: string
   paint: GpuMesh
@@ -57,6 +62,8 @@ export class CircuitToWebGpuDrawer {
   private lost = false
   private paintPipeline: GPURenderPipeline
   private erasePipeline: GPURenderPipeline
+  private paintStrokePipeline: GPURenderPipeline
+  private eraseStrokePipeline: GPURenderPipeline
   private compositePipeline: GPURenderPipeline
   private sampler: GPUSampler
   private options: RenderOptions = {}
@@ -142,11 +149,14 @@ export class CircuitToWebGpuDrawer {
         }),
       ],
     })
-    const geometry = (blend: GPUBlendState): GPURenderPipelineDescriptor => ({
+    const geometry = (
+      blend: GPUBlendState,
+      stroke = false,
+    ): GPURenderPipelineDescriptor => ({
       layout,
       vertex: {
         module,
-        entryPoint: "vertexMain",
+        entryPoint: stroke ? "strokeVertexMain" : "vertexMain",
         buffers: [
           {
             arrayStride: 32,
@@ -157,6 +167,20 @@ export class CircuitToWebGpuDrawer {
               { shaderLocation: 3, offset: 28, format: "float32" },
             ],
           },
+          ...(stroke
+            ? [
+                {
+                  arrayStride: 16,
+                  attributes: [
+                    {
+                      shaderLocation: 4,
+                      offset: 0,
+                      format: "float32x4" as const,
+                    },
+                  ],
+                },
+              ]
+            : []),
         ],
       },
       fragment: {
@@ -168,11 +192,14 @@ export class CircuitToWebGpuDrawer {
       multisample: { count: config.sampleCount ?? 4 },
     })
     this.paintPipeline = device.createRenderPipeline(geometry(over))
-    this.erasePipeline = device.createRenderPipeline(
-      geometry({
-        color: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
-        alpha: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
-      }),
+    const erase: GPUBlendState = {
+      color: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
+      alpha: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
+    }
+    this.erasePipeline = device.createRenderPipeline(geometry(erase))
+    this.paintStrokePipeline = device.createRenderPipeline(geometry(over, true))
+    this.eraseStrokePipeline = device.createRenderPipeline(
+      geometry(erase, true),
     )
     const composite = device.createShaderModule({ code: compositeShader })
     this.compositePipeline = device.createRenderPipeline({
@@ -249,6 +276,9 @@ export class CircuitToWebGpuDrawer {
         vertices: make(mesh.vertices, GPUBufferUsage.VERTEX),
         indices: make(mesh.indices, GPUBufferUsage.INDEX),
         count: mesh.indices.length,
+        stroke:
+          mesh.strokeAttributes &&
+          make(mesh.strokeAttributes, GPUBufferUsage.VERTEX),
       }
     }
     this.layers = scene.layers.map((layer) => ({
@@ -420,20 +450,26 @@ export class CircuitToWebGpuDrawer {
           },
         ],
       })
-      for (const [mesh, pipeline] of [
-        [layer.paint, this.paintPipeline],
-        [layer.erase, this.erasePipeline],
+      for (const [mesh, paint] of [
+        [layer.paint, true],
+        [layer.erase, false],
       ] as const) {
         if (!mesh.count) continue
+        const pipeline = mesh.stroke
+          ? paint
+            ? this.paintStrokePipeline
+            : this.eraseStrokePipeline
+          : paint
+            ? this.paintPipeline
+            : this.erasePipeline
         // Erase geometry (drills/cutouts) must retain its physical meaning in both passes.
         pass.setBindGroup(
           0,
-          xRay && pipeline === this.paintPipeline
-            ? this.xRayCameraGroup!
-            : this.cameraGroup!,
+          xRay && paint ? this.xRayCameraGroup! : this.cameraGroup!,
         )
         pass.setPipeline(pipeline)
         pass.setVertexBuffer(0, mesh.vertices)
+        if (mesh.stroke) pass.setVertexBuffer(1, mesh.stroke)
         pass.setIndexBuffer(mesh.indices, "uint32")
         pass.drawIndexed(mesh.count)
       }
@@ -562,6 +598,7 @@ export class CircuitToWebGpuDrawer {
       for (const mesh of [layer.paint, layer.erase]) {
         mesh.vertices.destroy()
         mesh.indices.destroy()
+        mesh.stroke?.destroy()
       }
       layer.opacity.destroy()
       layer.texture?.destroy()

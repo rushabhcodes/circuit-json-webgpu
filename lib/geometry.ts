@@ -1,11 +1,13 @@
 import earcut from "earcut"
 import polygonClipping, { type Polygon } from "polygon-clipping"
 import type { Color, Mesh, Point } from "./types"
+import { getSmoothStroke } from "./get-smooth-stroke"
 
 /** Tessellation is camera-independent and runs only when circuit data changes. */
 export class MeshBuilder {
   vertices: number[] = []
   indices: number[] = []
+  private strokeAttributes?: number[]
   constructor(
     public color: Color = [1, 1, 1, 1],
     public element = 0,
@@ -34,6 +36,9 @@ export class MeshBuilder {
         this.category,
       )
     for (const index of triangles) this.indices.push(base + index)
+    if (this.strokeAttributes)
+      for (let i = 0; i < points.length / 2; i++)
+        this.strokeAttributes.push(0, 0, 0, 0)
   }
   line(a: Point, b: Point, width: number) {
     if (!(width > 0)) return
@@ -41,6 +46,28 @@ export class MeshBuilder {
     this.polygon([points])
   }
   path(points: Point[], width: number, closed = false) {
+    const stroke = closed ? getSmoothStroke(points, width) : undefined
+    if (stroke) {
+      this.strokeAttributes ??= new Array(this.vertices.length / 2).fill(0)
+      const base = this.vertices.length / 8
+      for (const [i, point] of stroke.points.entries()) {
+        const normal = stroke.normals[i]
+        for (const side of [1, -1]) {
+          this.vertices.push(
+            point.x + ((normal.x * width) / 2) * side,
+            point.y + ((normal.y * width) / 2) * side,
+            ...this.color,
+            this.element,
+            this.category,
+          )
+          this.strokeAttributes.push(normal.x, normal.y, width / 2, side)
+        }
+        const a = base + i * 2,
+          b = base + ((i + 1) % stroke.points.length) * 2
+        this.indices.push(a, b, b + 1, a, b + 1, a + 1)
+      }
+      return
+    }
     for (let i = 1; i < points.length; i++)
       this.line(points[i - 1], points[i], width)
     if (closed && points.length > 2) this.line(points.at(-1)!, points[0], width)
@@ -81,6 +108,9 @@ export class MeshBuilder {
     return {
       vertices: new Float32Array(this.vertices),
       indices: new Uint32Array(this.indices),
+      ...(this.strokeAttributes
+        ? { strokeAttributes: new Float32Array(this.strokeAttributes) }
+        : {}),
     }
   }
 }
