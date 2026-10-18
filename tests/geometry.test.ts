@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { pcb_silkscreen_oval, pcb_silkscreen_pill } from "circuit-json"
 import "./parity/prepare-upstream"
 import { compileCircuitJson } from "../lib"
 import type { CircuitJson } from "../lib"
@@ -14,6 +15,7 @@ import large from "./fixtures/am3352-dev-board.circuit.json"
 import breakout from "./fixtures/f1c100s-breakout.circuit.json"
 import museSockets from "./fixtures/muse-socket-plated-holes.circuit.json"
 import pcbBend from "./fixtures/pcb-bend.circuit.json"
+import { meshCovers } from "./fixtures/mesh-geometry"
 
 function area(mesh: ReturnType<MeshBuilder["build"]>) {
   let area = 0
@@ -26,6 +28,134 @@ function area(mesh: ReturnType<MeshBuilder["build"]>) {
   }
   return area
 }
+
+test("silkscreen pills preserve hollow capsule outlines, dimensions, rotation, and layers", () => {
+  for (const layer of ["top", "bottom"] as const) {
+    for (const [width, height, rotation] of [
+      [8, 4, 0],
+      [4, 8, 0],
+      [4, 4, 0],
+      [8, 4, 45],
+    ]) {
+      const center = { x: 10, y: -7 }
+      const scene = compileCircuitJson([
+        pcb_silkscreen_pill.parse({
+          type: "pcb_silkscreen_pill",
+          pcb_silkscreen_pill_id: "pill",
+          pcb_component_id: "component",
+          center,
+          width,
+          height,
+          ccw_rotation: rotation,
+          layer,
+        }),
+      ])
+      expect(scene.diagnostics).toEqual([])
+      expect(scene.layers.map((l) => l.name)).toEqual([`${layer}_silkscreen`])
+      const mesh = scene.layers[0].paint
+      const angle = (rotation * Math.PI) / 180
+      const point = (x: number, y: number) => ({
+        x: center.x + x * Math.cos(angle) - y * Math.sin(angle),
+        y: center.y + x * Math.sin(angle) + y * Math.cos(angle),
+      })
+      expect(meshCovers({ mesh, point: center })).toBe(false)
+      expect(meshCovers({ mesh, point: point(width / 2, 0) })).toBe(true)
+      expect(meshCovers({ mesh, point: point(0, height / 2) })).toBe(true)
+      expect(meshCovers({ mesh, point: point(width / 2, height / 2) })).toBe(
+        false,
+      )
+      expect(meshCovers({ mesh, point: point(width / 2 + 0.04, 0) })).toBe(true)
+      expect(meshCovers({ mesh, point: point(width / 2 + 0.06, 0) })).toBe(
+        false,
+      )
+      const radius = Math.min(width, height) / 2
+      const halfWidth =
+        (width / 2 - radius) * Math.abs(Math.cos(angle)) +
+        (height / 2 - radius) * Math.abs(Math.sin(angle)) +
+        radius
+      const halfHeight =
+        (width / 2 - radius) * Math.abs(Math.sin(angle)) +
+        (height / 2 - radius) * Math.abs(Math.cos(angle)) +
+        radius
+      const expectedBounds = [
+        center.x - halfWidth - 0.05,
+        center.x + halfWidth + 0.05,
+        center.y - halfHeight - 0.05,
+        center.y + halfHeight + 0.05,
+      ]
+      meshBounds(mesh).forEach((value, i) =>
+        expect(value).toBeCloseTo(expectedBounds[i], 2),
+      )
+    }
+  }
+})
+
+test("silkscreen ovals preserve hollow, closed, rotated ellipses on both layers", () => {
+  for (const layer of ["top", "bottom"] as const) {
+    for (const [radiusX, radiusY, rotation] of [
+      [4, 2, 0],
+      [2, 4, 0],
+      [2, 2, 0],
+      [4, 2, 45],
+      [4, 2, 90],
+    ]) {
+      const center = { x: -3, y: 6 }
+      const scene = compileCircuitJson([
+        pcb_silkscreen_oval.parse({
+          type: "pcb_silkscreen_oval",
+          pcb_silkscreen_oval_id: "oval",
+          pcb_component_id: "component",
+          center,
+          radius_x: radiusX,
+          radius_y: radiusY,
+          ccw_rotation: rotation,
+          layer,
+        }),
+      ])
+      expect(scene.diagnostics).toEqual([])
+      expect(scene.layers.map((l) => l.name)).toEqual([`${layer}_silkscreen`])
+      const mesh = scene.layers[0].paint
+      const angle = (rotation * Math.PI) / 180
+      const point = (x: number, y: number) => ({
+        x: center.x + x * Math.cos(angle) - y * Math.sin(angle),
+        y: center.y + x * Math.sin(angle) + y * Math.cos(angle),
+      })
+      expect(meshCovers({ mesh, point: center })).toBe(false)
+      expect(meshCovers({ mesh, point: point(radiusX, 0) })).toBe(true)
+      expect(meshCovers({ mesh, point: point(0, radiusY) })).toBe(true)
+      expect(meshCovers({ mesh, point: point(radiusX, radiusY) })).toBe(false)
+      expect(meshCovers({ mesh, point: point(radiusX + 0.04, 0) })).toBe(true)
+      expect(meshCovers({ mesh, point: point(radiusX + 0.06, 0) })).toBe(false)
+      // Sample the closing arc between the final tessellation point and the first.
+      expect(
+        meshCovers({
+          mesh,
+          point: point(
+            radiusX * Math.cos(-Math.PI / 96),
+            radiusY * Math.sin(-Math.PI / 96),
+          ),
+        }),
+      ).toBe(true)
+      const halfWidth = Math.hypot(
+        radiusX * Math.cos(angle),
+        radiusY * Math.sin(angle),
+      )
+      const halfHeight = Math.hypot(
+        radiusX * Math.sin(angle),
+        radiusY * Math.cos(angle),
+      )
+      const expectedBounds = [
+        center.x - halfWidth - 0.05,
+        center.x + halfWidth + 0.05,
+        center.y - halfHeight - 0.05,
+        center.y + halfHeight + 0.05,
+      ]
+      meshBounds(mesh).forEach((value, i) =>
+        expect(value).toBeCloseTo(expectedBounds[i], 2),
+      )
+    }
+  }
+})
 
 test("PCB bends leave board geometry unchanged without diagnostics", () => {
   const scene = compileCircuitJson(pcbBend as CircuitJson)
