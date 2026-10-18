@@ -28,6 +28,10 @@ struct VertexOut {
   let alpha = in.color.a * select(1.0, camera.viewport.z, in.category == 1u);
   return vec4f(in.color.rgb * alpha, alpha);
 }
+// Destination-out clips traces at full coverage, independent of pour opacity.
+@fragment fn fragmentClipTrace() -> @location(0) vec4f {
+  return vec4f(0, 0, 0, 1);
+}
 `
 export const compositeShader = /* wgsl */ `
 @group(0) @binding(0) var image: texture_2d<f32>;

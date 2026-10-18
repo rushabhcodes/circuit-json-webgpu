@@ -1,6 +1,7 @@
 import { compileCircuitJson } from "./compile-circuit"
 import { normalizeLayer } from "./colors"
 import { compositeShader, geometryShader } from "./shaders"
+import { splitTraceMesh } from "./split-trace-mesh"
 import type {
   CircuitJson,
   CompiledScene,
@@ -15,6 +16,8 @@ type Layer = {
   name: string
   paint: GpuMesh
   erase: GpuMesh
+  traces?: GpuMesh
+  pourClip?: GpuMesh
   opacity: GPUBuffer
   texture?: GPUTexture
   composite?: GPUBindGroup
@@ -57,6 +60,7 @@ export class CircuitToWebGpuDrawer {
   private lost = false
   private paintPipeline: GPURenderPipeline
   private erasePipeline: GPURenderPipeline
+  private traceClipPipeline: GPURenderPipeline
   private compositePipeline: GPURenderPipeline
   private sampler: GPUSampler
   private options: RenderOptions = {}
@@ -142,7 +146,10 @@ export class CircuitToWebGpuDrawer {
         }),
       ],
     })
-    const geometry = (blend: GPUBlendState): GPURenderPipelineDescriptor => ({
+    const geometry = (
+      blend: GPUBlendState,
+      entryPoint = "fragmentMain",
+    ): GPURenderPipelineDescriptor => ({
       layout,
       vertex: {
         module,
@@ -161,18 +168,20 @@ export class CircuitToWebGpuDrawer {
       },
       fragment: {
         module,
-        entryPoint: "fragmentMain",
+        entryPoint,
         targets: [{ format: "rgba8unorm", blend }],
       },
       primitive: { topology: "triangle-list" },
       multisample: { count: config.sampleCount ?? 4 },
     })
     this.paintPipeline = device.createRenderPipeline(geometry(over))
-    this.erasePipeline = device.createRenderPipeline(
-      geometry({
-        color: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
-        alpha: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
-      }),
+    const erase: GPUBlendState = {
+      color: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
+      alpha: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
+    }
+    this.erasePipeline = device.createRenderPipeline(geometry(erase))
+    this.traceClipPipeline = device.createRenderPipeline(
+      geometry(erase, "fragmentClipTrace"),
     )
     const composite = device.createShaderModule({ code: compositeShader })
     this.compositePipeline = device.createRenderPipeline({
@@ -228,7 +237,7 @@ export class CircuitToWebGpuDrawer {
       ],
     })
     this.stats.vertexBytes = 0
-    const upload = (mesh: Mesh): GpuMesh => {
+    const upload = (mesh: Mesh, vertices?: GPUBuffer): GpuMesh => {
       const make = (data: Float32Array | Uint32Array, usage: number) => {
         const buffer = this.device.createBuffer({
           size: Math.max(4, data.byteLength),
@@ -246,20 +255,26 @@ export class CircuitToWebGpuDrawer {
         return buffer
       }
       return {
-        vertices: make(mesh.vertices, GPUBufferUsage.VERTEX),
+        vertices: vertices ?? make(mesh.vertices, GPUBufferUsage.VERTEX),
         indices: make(mesh.indices, GPUBufferUsage.INDEX),
         count: mesh.indices.length,
       }
     }
-    this.layers = scene.layers.map((layer) => ({
-      name: layer.name,
-      paint: upload(layer.paint),
-      erase: upload(layer.erase),
-      opacity: this.device.createBuffer({
-        size: 16,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      }),
-    }))
+    this.layers = scene.layers.map((layer) => {
+      const meshes = splitTraceMesh(layer.paint)
+      const paint = upload(meshes.paint)
+      return {
+        name: layer.name,
+        paint,
+        erase: upload(layer.erase),
+        traces: meshes.traces && upload(meshes.traces, paint.vertices),
+        pourClip: meshes.pourClip && upload(meshes.pourClip, paint.vertices),
+        opacity: this.device.createBuffer({
+          size: 16,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        }),
+      }
+    })
     // Share retained geometry; only the per-layer compositing targets are separate.
     this.xRayLayers = this.layers
       .filter((layer) => this.isCopper(layer.name) || layer.name === "drill")
@@ -420,11 +435,18 @@ export class CircuitToWebGpuDrawer {
           },
         ],
       })
+      // Clip only traces before painting pads, vias, and pours over them.
+      // Selected X-Ray copper and hidden-pour views retain complete traces.
       for (const [mesh, pipeline] of [
+        [layer.traces, this.paintPipeline],
+        [
+          !xRay && copperPourOpacity > 0 ? layer.pourClip : undefined,
+          this.traceClipPipeline,
+        ],
         [layer.paint, this.paintPipeline],
         [layer.erase, this.erasePipeline],
       ] as const) {
-        if (!mesh.count) continue
+        if (!mesh?.count) continue
         // Erase geometry (drills/cutouts) must retain its physical meaning in both passes.
         pass.setBindGroup(
           0,
@@ -553,19 +575,27 @@ export class CircuitToWebGpuDrawer {
       throw new Error(this.lost ? "WebGPU device lost" : "Renderer disposed")
   }
   private releaseLayers() {
+    const buffers = new Set<GPUBuffer>()
     for (const layer of this.xRayLayers) {
       layer.opacity.destroy()
       layer.texture?.destroy()
     }
     this.xRayLayers = []
     for (const layer of this.layers) {
-      for (const mesh of [layer.paint, layer.erase]) {
-        mesh.vertices.destroy()
-        mesh.indices.destroy()
+      for (const mesh of [
+        layer.paint,
+        layer.erase,
+        layer.traces,
+        layer.pourClip,
+      ]) {
+        if (!mesh) continue
+        buffers.add(mesh.vertices)
+        buffers.add(mesh.indices)
       }
       layer.opacity.destroy()
       layer.texture?.destroy()
     }
+    for (const buffer of buffers) buffer.destroy()
     this.layers = []
   }
   dispose() {

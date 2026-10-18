@@ -7,6 +7,7 @@ import { drawKeepout } from "./draw-keepout"
 import { drawPcbDimension } from "./pcb-dimension/draw-pcb-dimension"
 import { drawText } from "./text/draw-text"
 import { DEFAULT_LAYER_COLORS, normalizeLayer, parseColor } from "./colors"
+import { TRACE_CATEGORY } from "./split-trace-mesh"
 import {
   ellipse,
   expandBrepRing,
@@ -148,6 +149,8 @@ export function compileCircuitJson(
     return mesh
   }
   const openings: { element: Element; index: number; layers: string[] }[] = []
+  const getTrace = (layer: string, index: number) =>
+    get(layer, index, false, TRACE_CATEGORY)
   const keepouts: { rings: Point[][]; index: number; layers: string[] }[] = []
   const cutouts: { rings: Point[][]; index: number }[] = []
   for (const [index, input] of elements.entries()) {
@@ -205,12 +208,12 @@ export function compileCircuitJson(
           const polygon = getWireTaperPolygon(point)
           if (!polygon.length)
             throw new Error("Invalid teardrop geometry or interpolation mode")
-          get(point.layer, index).polygon([polygon])
+          getTrace(point.layer, index).polygon([polygon])
         }
         for (const point of route) {
           if (point.route_type !== "through_pad") continue
           for (const layer of new Set([point.start_layer, point.end_layer]))
-            get(layer, index).line(point.start, point.end, point.width)
+            getTrace(layer, index).line(point.start, point.end, point.width)
         }
         for (let i = 1; i < route.length; i++) {
           let a = route[i - 1],
@@ -237,19 +240,19 @@ export function compileCircuitJson(
             b.route_type === "wire" &&
             a.layer === b.layer
           )
-            get(a.layer, index).line(a, b, a.width)
+            getTrace(a.layer, index).line(a, b, a.width)
           else if (
             a.route_type === "wire" &&
             b.route_type === "via" &&
             [b.from_layer, b.to_layer].includes(a.layer)
           )
-            get(a.layer, index).line(a, b, a.width)
+            getTrace(a.layer, index).line(a, b, a.width)
           else if (
             a.route_type === "via" &&
             b.route_type === "wire" &&
             [a.from_layer, a.to_layer].includes(b.layer)
           )
-            get(b.layer, index).line(a, b, b.width)
+            getTrace(b.layer, index).line(a, b, b.width)
         }
       } else if (type === "pcb_copper_pour") {
         get(e.layer, index, false, 1).polygon(shape(e))

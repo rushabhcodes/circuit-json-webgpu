@@ -60,3 +60,38 @@ test("dispose also destroys a device whose submitted work rejects", async () => 
   await Promise.resolve()
   expect(calls.at(-1)).toBe("device")
 })
+
+test("dispose releases shared trace vertices once and every clipping index buffer", async () => {
+  const { drawer, calls, finish } = renderer()
+  const resource = (name: string) => ({ destroy: () => calls.push(name) })
+  const vertices = resource("shared-vertices")
+  const mesh = (name: string) => ({
+    vertices,
+    indices: resource(name),
+    count: 3,
+  })
+  Object.assign(drawer, {
+    layers: [
+      {
+        paint: mesh("paint-indices"),
+        traces: mesh("trace-indices"),
+        pourClip: mesh("clip-indices"),
+        erase: mesh("erase-indices"),
+        opacity: resource("opacity"),
+      },
+    ],
+  })
+  drawer.dispose()
+  drawer.dispose()
+  for (const name of [
+    "shared-vertices",
+    "paint-indices",
+    "trace-indices",
+    "clip-indices",
+    "erase-indices",
+    "opacity",
+  ])
+    expect(calls.filter((call) => call === name)).toHaveLength(1)
+  finish()
+  await Promise.resolve()
+})

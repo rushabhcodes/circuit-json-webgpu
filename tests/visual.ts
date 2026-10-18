@@ -254,6 +254,119 @@ try {
     }
     assert.equal(pixel(frame, 100, 70)[3], 0, "Stroke width stays unchanged")
   }
+  const traceClipping = await page.evaluate(() => {
+    const drawer = window.gpuTest.drawer
+    const canvas = document.querySelector("canvas")!
+    const capture = () => canvas.toDataURL("image/png").split(",")[1]
+    return [
+      "top",
+      "bottom",
+      ...Array.from({ length: 8 }, (_, i) => `inner${i + 1}`),
+    ].map((layer) => {
+      const pour = {
+        type: "pcb_copper_pour",
+        pcb_copper_pour_id: "pour",
+        shape: "brep",
+        layer,
+        covered_with_solder_mask: false,
+        brep_shape: {
+          outer_ring: {
+            vertices: [
+              { x: -5, y: -3 },
+              { x: 5, y: -3 },
+              { x: 5, y: 3 },
+              { x: -5, y: 3 },
+            ],
+          },
+          inner_rings: [
+            {
+              vertices: [
+                { x: -1, y: -1 },
+                { x: 1, y: -1 },
+                { x: 1, y: 1 },
+                { x: -1, y: 1 },
+              ],
+            },
+          ],
+        },
+      }
+      const trace = {
+        type: "pcb_trace",
+        pcb_trace_id: "trace",
+        route: [
+          { route_type: "wire", x: -8, y: 0, width: 0.5, layer },
+          { route_type: "wire", x: 8, y: 0, width: 0.5, layer },
+        ],
+      }
+      const options = {
+        transform: { a: 10, b: 0, c: 0, d: -10, e: 100, f: 100 },
+        layers: [layer],
+        selectedLayer: layer,
+        hiddenLayerOpacity: 0,
+        background: [0, 0, 0, 0] as const,
+      }
+      drawer.drawElements([trace, pour] as CircuitJson, options)
+      const normal = capture()
+      const uploads = drawer.stats.geometryUploads
+      drawer.render({ showCopperPours: false })
+      const hiddenPours = capture()
+      drawer.render({ showCopperPours: true, copperPourOpacity: 0 })
+      const transparentPours = capture()
+      drawer.render({ copperPourOpacity: 0.5, xRayElementIds: ["trace"] })
+      const xRay = capture()
+      drawer.render({ layers: ["top_silkscreen"] })
+      const filtered = capture()
+      const geometryUploadsDuringToggles =
+        drawer.stats.geometryUploads - uploads
+      drawer.drawElements([pour] as CircuitJson, options)
+      return {
+        layer,
+        normal,
+        hiddenPours,
+        transparentPours,
+        xRay,
+        filtered,
+        withoutTrace: capture(),
+        geometryUploadsDuringToggles,
+        diagnostics: drawer.diagnostics,
+      }
+    })
+  })
+  for (const result of traceClipping) {
+    assert.deepEqual(result.diagnostics, [])
+    assert.equal(result.geometryUploadsDuringToggles, 0)
+    for (const x of [70, 130]) {
+      assert.deepEqual(
+        pixel(result.normal, x, 100),
+        pixel(result.withoutTrace, x, 100),
+        `${result.layer}: a covered trace must not brighten the pour`,
+      )
+      assert(Math.abs(pixel(result.normal, x, 100)[3] - 128) <= 1)
+    }
+    for (const x of [40, 100, 160]) {
+      assert.equal(pixel(result.normal, x, 100)[3], 255, "Visible trace copper")
+      assert.equal(
+        pixel(result.withoutTrace, x, 100)[3],
+        0,
+        "Clearance and exterior",
+      )
+    }
+    for (const frame of [
+      result.hiddenPours,
+      result.transparentPours,
+      result.xRay,
+    ])
+      for (const x of [40, 70, 100, 130, 160])
+        assert.equal(pixel(frame, x, 100)[3], 255, "Retained full trace copper")
+    assert.equal(
+      pixel(result.filtered, 130, 100)[3],
+      0,
+      "Explicit layer filtering",
+    )
+  }
+  console.log(
+    "Copper-pour trace clipping and retained toggles pass on all 10 copper layers",
+  )
   const pours = await page.evaluate(() =>
     window.gpuTest.checkCopperPourOpacity(),
   )
