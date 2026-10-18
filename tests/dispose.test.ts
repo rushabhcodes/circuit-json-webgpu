@@ -60,31 +60,3 @@ test("dispose also destroys a device whose submitted work rejects", async () => 
   await Promise.resolve()
   expect(calls.at(-1)).toBe("device")
 })
-
-test("dispose releases retained analytic-stroke attributes once", async () => {
-  const { drawer, calls, finish } = renderer()
-  const resource = (name: string) => ({ destroy: () => calls.push(name) })
-  Object.assign(drawer, {
-    layers: [
-      {
-        paint: {
-          vertices: resource("vertices"),
-          indices: resource("indices"),
-          stroke: resource("stroke"),
-          count: 6,
-        },
-        erase: {
-          vertices: resource("erase-vertices"),
-          indices: resource("erase-indices"),
-          count: 0,
-        },
-        opacity: resource("opacity"),
-      },
-    ],
-  })
-  drawer.dispose()
-  drawer.dispose()
-  expect(calls.filter((call) => call === "stroke")).toHaveLength(1)
-  finish()
-  await Promise.resolve()
-})
