@@ -40,7 +40,7 @@ export type Diagnostic = { elementId: string; type: string; message: string }
 export type Mesh = {
   vertices: Float32Array
   indices: Uint32Array
-  /** Per vertex: outward miter normal, physical half-width, and signed side. */
+  /** Per vertex: miter normal, half-width, side, max inset, circle radius (or 0). */
   strokeAttributes?: Float32Array
 }
 export type CompiledLayer = { name: string; paint: Mesh; erase: Mesh }

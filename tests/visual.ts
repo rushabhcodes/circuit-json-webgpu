@@ -78,6 +78,76 @@ try {
       ),
     ]
   }
+  const circleFrames = await page.evaluate(async () => {
+    const modulePath = "/lib/index.ts"
+    const { CircuitToWebGpuDrawer } = (await import(
+      modulePath
+    )) as typeof import("../lib")
+    const frames = []
+    for (const sampleCount of [1, 4] as const) {
+      for (const opacity of [1, 0.5]) {
+        const canvas = document.createElement("canvas")
+        canvas.width = canvas.height = 64
+        const drawer = await CircuitToWebGpuDrawer.create(canvas, {
+          sampleCount,
+          layerColors: { top_silkscreen: [1, 1, 1, opacity] },
+        })
+        try {
+          for (const radius of [0.1, 0.5, 10]) {
+            drawer.setCircuitJson([
+              {
+                type: "pcb_silkscreen_circle",
+                pcb_silkscreen_circle_id: "thin-circle",
+                pcb_component_id: "component",
+                layer: "top",
+                center: { x: 0, y: 0 },
+                radius,
+                stroke_width: 0.05,
+              },
+            ])
+            for (const phase of [0, 0.25, 0.5]) {
+              drawer.render({
+                transform: {
+                  a: 1,
+                  b: 0,
+                  c: 0,
+                  d: -1,
+                  e: 32 + phase,
+                  f: 32 + phase,
+                },
+                background: [0, 0, 0, 1],
+              })
+              frames.push({
+                radius,
+                opacity,
+                sampleCount,
+                phase,
+                png: canvas.toDataURL("image/png").split(",")[1],
+              })
+            }
+          }
+        } finally {
+          drawer.dispose()
+        }
+      }
+    }
+    return frames
+  })
+  for (const { png, radius, opacity, sampleCount, phase } of circleFrames) {
+    const image = PNG.sync.read(Buffer.from(png, "base64"))
+    let coverage = 0
+    for (let i = 0; i < image.data.length; i += 4)
+      coverage += image.data[i] / 255
+    const expected = 2 * Math.PI * radius * 0.05 * opacity
+    // Allow RGBA8 rounding in the few pixels touched by a subpixel circle. The
+    // larger control also allows the polygon/linear-distance approximation.
+    const tolerance = radius < 1 ? 3 / 255 : expected * 0.05
+    assert(
+      Math.abs(coverage - expected) <= tolerance,
+      `Circle coverage ${coverage}, expected ${expected}; radius=${radius}, opacity=${opacity}, samples=${sampleCount}, phase=${phase}`,
+    )
+  }
+  console.log(`${circleFrames.length} thin-circle coverage/opacity checks`)
   const fabrication = await page.evaluate(() => {
     const drawer = window.gpuTest.drawer
     const canvas = document.querySelector("canvas")!

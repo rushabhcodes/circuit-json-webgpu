@@ -1,13 +1,14 @@
 import type { Point } from "./types"
 
+const samePoint = (a: Point, b: Point) =>
+  Math.hypot(a.x - b.x, a.y - b.y) <=
+  Number.EPSILON *
+    8 *
+    Math.max(1, Math.abs(a.x), Math.abs(a.y), Math.abs(b.x), Math.abs(b.y))
+
 /** A convex, gently turning closed path can use a continuous stroke ribbon. */
 export function getSmoothStroke(points: Point[], width: number) {
   if (!(width > 0) || !Number.isFinite(width)) return
-  const samePoint = (a: Point, b: Point) =>
-    Math.hypot(a.x - b.x, a.y - b.y) <=
-    Number.EPSILON *
-      8 *
-      Math.max(1, Math.abs(a.x), Math.abs(a.y), Math.abs(b.x), Math.abs(b.y))
   const ring: Point[] = []
   for (const point of points) {
     if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return
@@ -42,13 +43,31 @@ export function getSmoothStroke(points: Point[], width: number) {
       y: (-winding * (a.x + b.x)) / (1 + dot),
     })
   }
+  let maxInset = Number.POSITIVE_INFINITY
   for (let i = 0; i < ring.length; i++) {
     const next = (i + 1) % ring.length
-    const dx =
-      ring[next].x - ring[i].x - (width / 2) * (normals[next].x - normals[i].x)
-    const dy =
-      ring[next].y - ring[i].y - (width / 2) * (normals[next].y - normals[i].y)
-    if (dx * directions[i].x + dy * directions[i].y <= 0) return
+    const length = Math.hypot(
+      ring[next].x - ring[i].x,
+      ring[next].y - ring[i].y,
+    )
+    const shrink =
+      (normals[next].x - normals[i].x) * directions[i].x +
+      (normals[next].y - normals[i].y) * directions[i].y
+    if (shrink > 0) maxInset = Math.min(maxInset, length / shrink)
   }
-  return { points: ring, normals }
+  if (!Number.isFinite(maxInset) || maxInset <= width / 2) return
+  // A circle's inset collapses to one center. Other convex paths only use the
+  // limit to stop the camera-dependent AA fringe before its first folded edge.
+  const isCircle = ring.every(
+    (point, i) =>
+      Math.hypot(
+        point.x - origin.x - (normals[i].x - normals[0].x) * maxInset,
+        point.y - origin.y - (normals[i].y - normals[0].y) * maxInset,
+      ) <=
+      maxInset * 1e-6,
+  )
+  const circleRadius = isCircle
+    ? Math.hypot(normals[0].x, normals[0].y) * maxInset
+    : 0
+  return { points: ring, normals, maxInset, circleRadius }
 }

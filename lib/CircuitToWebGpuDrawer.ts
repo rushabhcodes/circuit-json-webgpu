@@ -169,12 +169,17 @@ export class CircuitToWebGpuDrawer {
           ...(stroke
             ? [
                 {
-                  arrayStride: 16,
+                  arrayStride: 24,
                   attributes: [
                     {
                       shaderLocation: 4,
                       offset: 0,
                       format: "float32x4" as const,
+                    },
+                    {
+                      shaderLocation: 5,
+                      offset: 16,
+                      format: "float32x2" as const,
                     },
                   ],
                 },
@@ -184,7 +189,7 @@ export class CircuitToWebGpuDrawer {
       },
       fragment: {
         module,
-        entryPoint: "fragmentMain",
+        entryPoint: stroke ? "strokeFragmentMain" : "fragmentMain",
         targets: [{ format: "rgba8unorm", blend }],
       },
       primitive: { topology: "triangle-list" },

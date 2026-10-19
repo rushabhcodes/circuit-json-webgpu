@@ -38,7 +38,7 @@ export class MeshBuilder {
     for (const index of triangles) this.indices.push(base + index)
     if (this.strokeAttributes)
       for (let i = 0; i < points.length / 2; i++)
-        this.strokeAttributes.push(0, 0, 0, 0)
+        this.strokeAttributes.push(0, 0, 0, 0, 0, 0)
   }
   line(a: Point, b: Point, width: number) {
     if (!(width > 0)) return
@@ -48,7 +48,9 @@ export class MeshBuilder {
   path(points: Point[], width: number, closed = false) {
     const stroke = closed ? getSmoothStroke(points, width) : undefined
     if (stroke) {
-      this.strokeAttributes ??= new Array(this.vertices.length / 2).fill(0)
+      this.strokeAttributes ??= new Array((this.vertices.length / 8) * 6).fill(
+        0,
+      )
       const base = this.vertices.length / 8
       for (const [i, point] of stroke.points.entries()) {
         const normal = stroke.normals[i]
@@ -60,7 +62,14 @@ export class MeshBuilder {
             this.element,
             this.category,
           )
-          this.strokeAttributes.push(normal.x, normal.y, width / 2, side)
+          this.strokeAttributes.push(
+            normal.x,
+            normal.y,
+            width / 2,
+            side,
+            stroke.maxInset,
+            stroke.circleRadius,
+          )
         }
         const a = base + i * 2,
           b = base + ((i + 1) % stroke.points.length) * 2
