@@ -1,3 +1,4 @@
+import colorString from "color-string"
 import type { Color } from "./types"
 const rgb = (r: number, g: number, b: number): Color => [
   r / 255,
@@ -59,5 +60,7 @@ export function parseColor(value: string): Color {
         channels[3] ?? 1,
       ]
   }
+  const named = colorString.get.rgb(value.trim())
+  if (named) return [named[0] / 255, named[1] / 255, named[2] / 255, named[3]]
   throw new Error(`Unsupported color: ${value}`)
 }
