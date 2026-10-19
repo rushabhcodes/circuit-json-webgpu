@@ -321,6 +321,8 @@ export function compileCircuitJson(
         } else if (type === "pcb_silkscreen_graphic" && e.shape === "brep") {
           mesh.polygon(shape(e))
         } else if (type.endsWith("_rect")) {
+          if (type === "pcb_fabrication_note_rect" && e.color)
+            mesh.color = parseColor(e.color)
           const points = rectangle(
             center(e),
             e.width,

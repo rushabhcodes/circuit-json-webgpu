@@ -63,7 +63,6 @@ export class CircuitToWebGpuDrawer {
   private paintPipeline: GPURenderPipeline
   private erasePipeline: GPURenderPipeline
   private paintStrokePipeline: GPURenderPipeline
-  private eraseStrokePipeline: GPURenderPipeline
   private compositePipeline: GPURenderPipeline
   private sampler: GPUSampler
   private options: RenderOptions = {}
@@ -192,15 +191,13 @@ export class CircuitToWebGpuDrawer {
       multisample: { count: config.sampleCount ?? 4 },
     })
     this.paintPipeline = device.createRenderPipeline(geometry(over))
-    const erase: GPUBlendState = {
-      color: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
-      alpha: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
-    }
-    this.erasePipeline = device.createRenderPipeline(geometry(erase))
-    this.paintStrokePipeline = device.createRenderPipeline(geometry(over, true))
-    this.eraseStrokePipeline = device.createRenderPipeline(
-      geometry(erase, true),
+    this.erasePipeline = device.createRenderPipeline(
+      geometry({
+        color: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
+        alpha: { srcFactor: "zero", dstFactor: "one-minus-src-alpha" },
+      }),
     )
+    this.paintStrokePipeline = device.createRenderPipeline(geometry(over, true))
     const composite = device.createShaderModule({ code: compositeShader })
     this.compositePipeline = device.createRenderPipeline({
       layout: "auto",
@@ -450,22 +447,20 @@ export class CircuitToWebGpuDrawer {
           },
         ],
       })
-      for (const [mesh, paint] of [
-        [layer.paint, true],
-        [layer.erase, false],
+      for (const [mesh, pipeline] of [
+        [
+          layer.paint,
+          layer.paint.stroke ? this.paintStrokePipeline : this.paintPipeline,
+        ],
+        [layer.erase, this.erasePipeline],
       ] as const) {
         if (!mesh.count) continue
-        const pipeline = mesh.stroke
-          ? paint
-            ? this.paintStrokePipeline
-            : this.eraseStrokePipeline
-          : paint
-            ? this.paintPipeline
-            : this.erasePipeline
         // Erase geometry (drills/cutouts) must retain its physical meaning in both passes.
         pass.setBindGroup(
           0,
-          xRay && paint ? this.xRayCameraGroup! : this.cameraGroup!,
+          xRay && mesh === layer.paint
+            ? this.xRayCameraGroup!
+            : this.cameraGroup!,
         )
         pass.setPipeline(pipeline)
         pass.setVertexBuffer(0, mesh.vertices)
